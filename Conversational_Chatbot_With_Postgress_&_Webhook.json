@@ -1,0 +1,223 @@
+{
+  "name": "IC_4_Conversation-Chatbot-Postgress_&_Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const body = $json;\n\n// handle both structures safely\nconst incoming = body.sessionId || body.body?.sessionId || '';\nconst message = (body.chatInput || body.body?.chatInput || '').trim();\n\nfunction generateSessionId() {\n  const random = Math.random().toString(36).slice(2, 8);\n  const timestamp = Date.now();\n  return `${random}${timestamp}`;\n}\n\nlet sessionId;\n\n// ONLY create new if truly empty\nif (!incoming || incoming.trim() === '') {\n  sessionId = generateSessionId();\n} else {\n  sessionId = incoming;\n}\n\nreturn [\n  {\n    json: {\n      sessionId,\n      chatInput: message\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        0
+      ],
+      "id": "115f4379-e40e-4b20-bc03-93b8b73bc43f",
+      "name": "Session Manager"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "You are a helpful assistant. Answer the user's question clearly and directly. Do not give generic greetings unless necessary."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        496,
+        0
+      ],
+      "id": "70d95776-155e-4f4e-b2d9-2e204cfdfaa3",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        496,
+        208
+      ],
+      "id": "b63c3d07-273d-4c8e-8075-9a36d7d25e05",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "hpt5RvXBH0X9wOGX",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Session Manager').item.json.sessionId }}",
+        "tableName": "n8n_chat_history",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        640,
+        208
+      ],
+      "id": "a0f358e0-a9e6-4f1c-8648-5a02b53690f0",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "j1oJGhGaxLe0S8AC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chat_sessions (session_id, conversation)\nVALUES (\n  '{{ $('Session Manager').item.json.sessionId }}',\n  jsonb_build_array(\n    jsonb_build_object(\n      'turn', 1,\n      'user', '{{ $('Session Manager').item.json.chatInput.replace(/'/g, \"''\") }}',\n      'assistant', '{{ $('AI Agent').item.json.output.replace(/'/g, \"''\") }}',\n      'timestamp', NOW()\n    )\n  )\n)\nON CONFLICT (session_id)\nDO UPDATE SET\n  conversation = chat_sessions.conversation || jsonb_build_array(\n    jsonb_build_object(\n      'turn', jsonb_array_length(chat_sessions.conversation) + 1,\n      'user', '{{ $('Session Manager').item.json.chatInput.replace(/'/g, \"''\") }}',\n      'assistant', '{{ $('AI Agent').item.json.output.replace(/'/g, \"''\") }}',\n      'timestamp', NOW()\n    )\n  ),\n  updated_at = NOW();",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        768,
+        0
+      ],
+      "id": "8f0eb72b-b97c-4f1a-906c-9de453a1a9e0",
+      "name": "Upsert Conversation",
+      "credentials": {
+        "postgres": {
+          "id": "j1oJGhGaxLe0S8AC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "368e39ed-3aed-4499-8b77-6df37c4d3199",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        128,
+        0
+      ],
+      "id": "6c02563d-72fe-4db5-b508-6c8e18f5e676",
+      "name": "Webhook",
+      "webhookId": "368e39ed-3aed-4499-8b77-6df37c4d3199"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ sessionId: $('Session Manager').item.json.sessionId, response: $('AI Agent').item.json.output }) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {}
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        976,
+        0
+      ],
+      "id": "948560f5-e26c-4db3-b191-1f92ec9f3607",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Session Manager": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Upsert Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Conversation": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Session Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "684e531f-108c-416a-b266-903b82742d15",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6a3153097043cd29668bbf2ef86325db21eb4e82ac5059ce3467a21fbe806471"
+  },
+  "id": "qU4U3cLePKSZ1fS3",
+  "tags": []
+}
