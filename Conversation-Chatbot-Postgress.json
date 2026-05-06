@@ -1,0 +1,215 @@
+{
+  "name": "Conversation-Chatbot-postgress",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "options": {
+          "responseMode": "responseNodes"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        -80
+      ],
+      "id": "54df6ca2-a464-44c6-bb89-b4759c902f1d",
+      "name": "When chat message received",
+      "webhookId": "7df0bc90-cb08-4b21-8c25-990fcac9f8b9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('When chat message received').item.json;\nconst incoming = body.sessionId || '';\nconst message = (body.chatInput || '').trim();\n\nfunction generateSessionId() {\n  const random = Math.random().toString(36).slice(2, 8);\n  return `session_${Date.now()}_${random}`;\n}\n\nlet sessionId;\nif (message === '__new_session__' || !incoming) {\n  sessionId = generateSessionId();\n} else {\n  sessionId = incoming;\n}\n\nreturn [{ json: { sessionId, chatInput: message } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -80
+      ],
+      "id": "a7e192b2-431e-46e1-adf0-570aa26685c6",
+      "name": "Session Manager"
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are a helpful assistant."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        432,
+        -80
+      ],
+      "id": "499f01f9-1db7-4887-a45e-c062add8ce41",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        320,
+        128
+      ],
+      "id": "06e265c9-f090-435e-94ce-822a72ace8bf",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "64uqKGi3fmthlk7u",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Session Manager').item.json.sessionId }}",
+        "tableName": "n8n_chat_history",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        528,
+        96
+      ],
+      "id": "fed504ee-40d3-4bdd-94c6-92ed608f3d88",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "QaNRJDiYFNK8K0KF",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chat_sessions (session_id, conversation)\nVALUES (\n  '{{ $('Session Manager').item.json.sessionId }}',\n  jsonb_build_array(\n    jsonb_build_object(\n      'turn', 1,\n      'user', '{{ $('When chat message received').item.json.chatInput.replace(/'/g, \"''\") }}',\n      'assistant', '{{ $('AI Agent').item.json.output.replace(/'/g, \"''\") }}',\n      'timestamp', NOW()\n    )\n  )\n)\nON CONFLICT (session_id)\nDO UPDATE SET\n  conversation = chat_sessions.conversation || jsonb_build_array(\n    jsonb_build_object(\n      'turn', jsonb_array_length(chat_sessions.conversation) + 1,\n      'user', '{{ $('When chat message received').item.json.chatInput.replace(/'/g, \"''\") }}',\n      'assistant', '{{ $('AI Agent').item.json.output.replace(/'/g, \"''\") }}',\n      'timestamp', NOW()\n    )\n  ),\n  updated_at = NOW();",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        704,
+        -80
+      ],
+      "id": "01e251b0-4bcc-4198-8bfc-27b3a7002f17",
+      "name": "Upsert Conversation",
+      "credentials": {
+        "postgres": {
+          "id": "QaNRJDiYFNK8K0KF",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "message": "={{ $('AI Agent').item.json.output }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1.3,
+      "position": [
+        912,
+        -80
+      ],
+      "id": "12eddb3b-63f2-48be-9fc2-6e9e3cb3f804",
+      "name": "Chat",
+      "webhookId": "cdd8feb7-9b02-4479-8a3d-812e39160759"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Session Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Session Manager": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Upsert Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Conversation": {
+      "main": [
+        [
+          {
+            "node": "Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "56e6c73c-9599-43d7-93bf-493f48d9e177",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f8945e1676b80d29b396e19cfc031fd1282160af6898890d6372b6d47bd9e91f"
+  },
+  "id": "bHaOfeZHgaT0FSES",
+  "tags": []
+}
